@@ -10,6 +10,7 @@ fn main() {
     }
     let buf = fs::read(&args[1]).unwrap();
     let tokens = lex::lex(&buf[..]).unwrap();
+    println!("----------");
     for tok in tokens {
         println!("{:?}", tok);
     }

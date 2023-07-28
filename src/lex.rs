@@ -17,8 +17,11 @@ fn is_sym(c: u8) -> bool {
 #[derive(Debug, Clone)]
 pub enum Token {
     Let,
+    Match,
     Accept,
     Reject,
+    Func,
+    Arrow,
     Ident(String),
     Equals,
     Exec,
@@ -29,6 +32,11 @@ pub enum Token {
     BracesOpen,
     BracesClose,
     Bar,
+    Range,
+    Exclude,
+    And,
+    Or,
+    Dollar,
     MoveLeft,
     MoveRight,
     Print,
@@ -41,6 +49,7 @@ pub enum LexError {
     InvalidSymContent(u8),
     UnclosedSym,
     SymNumberTooBig,
+    InvalidOperator,
 }
 
 struct Lexer<'a> {
@@ -136,8 +145,10 @@ fn replace_keywords(tokens: &mut Vec<Token>) {
         let maybe_keyword = match tok {
             Token::Ident(s) => match s.as_str() {
                 "let" => Some(Token::Let),
+                "match" => Some(Token::Match),
                 "accept" => Some(Token::Accept),
                 "reject" => Some(Token::Reject),
+                "fn" => Some(Token::Func),
                 _ => None,
             },
             _ => None,
@@ -167,20 +178,43 @@ pub fn lex(buf: &[u8]) -> Result<Vec<Token>, LexError> {
             b'<' => Ok(Token::MoveLeft),
             b'>' => Ok(Token::MoveRight),
             b'#' => Ok(Token::Print),
-            b'=' => Ok(Token::Equals),
+            b'=' => match lx.getch() {
+                Some(b'>') => Ok(Token::Arrow),
+                _ => {
+                    lx.ungetch();
+                    Ok(Token::Equals)
+                },
+            },
             b'[' => Ok(Token::ActionOpen),
             b']' => Ok(Token::ActionClose),
             b'(' => Ok(Token::ParensOpen),
             b')' => Ok(Token::ParensClose),
             b'{' => Ok(Token::BracesOpen),
             b'}' => Ok(Token::BracesClose),
-            b'|' => Ok(Token::Bar),
+            b'|' => match lx.getch() {
+                Some(b'|') => Ok(Token::Or),
+                _ => {
+                    lx.ungetch();
+                    Ok(Token::Bar)
+                },
+            },
+            b'&' => match lx.getch() {
+                Some(b'&') => Ok(Token::And),
+                _ => {
+                    lx.ungetch();
+                    Err(LexError::InvalidOperator)
+                },
+            },
+            b'-' => Ok(Token::Range),
+            b'!' => Ok(Token::Exclude),
+            b'$' => Ok(Token::Dollar),
             b'@' => Ok(Token::Exec),
             b'\'' => lx.collect_sym(),
             cc if cc.is_ascii_digit() => lx.collect_num(cc),
             cc if is_ident_start(cc) => Ok(lx.collect_ident()),
             other => Err(LexError::UnexpectedChar(other)),
         }?;
+        println!("{:?}", tok);
         tokens.push(tok);
     }
     

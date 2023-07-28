@@ -1,0 +1,9 @@
+Assign => 'let' 'Ident' '=' Expr
+Action => '[' (Assign|)* ']'
+
+Expr = Sel | '@'? Action | '@'? Ident ( '(' Expr+ ')' )? | Fun | ... | $
+Fun = 'fn' '(' ')'
+Type = '[' ']' ( '=>' TypeWithBracesAllowed )?
+     | '|' '|'
+     | '#'
+     | 'fn' '(' TypeWithBracesAllowed+ ')'

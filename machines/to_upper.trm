@@ -1,0 +1,13 @@
+let main = [
+  let lower = 'a'-'z'
+  match $ {
+    |lower| @[ #to_upper($) > @main ]
+    |!| accept
+  }
+]
+
+let to_upper = fn(c) => match c {
+  |'a'| 'A'
+  |'b'| 'B'
+  |'c'| 'C'
+}
