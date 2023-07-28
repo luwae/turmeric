@@ -1,43 +1,61 @@
-fn is_whitespace(c: u8) {
+fn is_whitespace(c: u8) -> bool {
     c == b'\n' || c == b'\t' || c == b' '
 }
 
-fn is_ident_start(c: u8) {
-    b'a'..=b'z'.contains(&c) || b'A'..=b'Z'.contains(&c) || c == b'_'
+fn is_ident_start(c: u8) -> bool {
+    c.is_ascii_alphabetic() || c == b'_'
 }
 
-fn is_ident(c: u8) {
-    is_ident_start(c) || b'0'..=b'9'.contains(&c)
+fn is_ident(c: u8) -> bool {
+    is_ident_start(c) || c.is_ascii_digit()
 }
 
-fn is_sym(c: u8) {
-    c != b'\'' && b' '..=b'~'.contains(&c)
+fn is_sym(c: u8) -> bool {
+    c != b'\'' && (b' '..=b'~').contains(&c)
 }
 
 #[derive(Debug, Clone)]
 pub enum Token {
     Let,
     Accept,
+    Reject,
     Ident(String),
     Equals,
     Exec,
     ActionOpen,
     ActionClose,
+    ParensOpen,
+    ParensClose,
+    BracesOpen,
+    BracesClose,
+    Bar,
     MoveLeft,
     MoveRight,
     Print,
     Sym(u8),
 }
 
+#[derive(Debug)]
+pub enum LexError {
+    UnexpectedChar(u8),
+    InvalidSymContent(u8),
+    UnclosedSym,
+    SymNumberTooBig,
+}
+
 struct Lexer<'a> {
     buf: &'a [u8],
     pos: usize,
+    lineno: usize,
 }
 
 impl<'a> Lexer<'a> {
     fn getch(&mut self) -> Option<u8> {
         if self.pos < self.buf.len() {
             let c = self.buf[self.pos];
+            if c == b'\n' {
+                self.lineno += 1;
+            }
             self.pos += 1;
             Some(c)
         } else {
@@ -48,10 +66,9 @@ impl<'a> Lexer<'a> {
     
     fn ungetch(&mut self) {
         self.pos -= 1;
-    }
-    
-    fn is_done(&self) {
-        self.pos >= self.buf.len()
+        if self.pos < self.buf.len() && self.buf[self.pos] == b'\n' {
+            self.lineno -= 1;
+        }
     }
     
     fn remove_whitespace(&mut self) {
@@ -63,8 +80,8 @@ impl<'a> Lexer<'a> {
         }
     }
     
-    fn collect_ident(&mut self, already_collected: usize) -> Token {
-        let idx_start = self.pos - already_collected;
+    fn collect_ident(&mut self) -> Token {
+        let idx_start = self.pos - 1;
         loop {
             match self.getch() {
                 Some(cc) if is_ident(cc) => { /* continue */ },
@@ -72,80 +89,101 @@ impl<'a> Lexer<'a> {
             }
         }
         let idx_end = self.pos;
-        Token::Ident(str::from_utf8(&self.buf[idx_start..idx_end]).unwrap().to_string())
+        Token::Ident(std::str::from_utf8(&self.buf[idx_start..idx_end]).unwrap().to_string())
     }
     
-    fn collect_keyword_or_ident(&mut self, already_collected: usize, keyword: &str, keyword_token: Token) -> Token {
-        let mut is_keyword = true;
-        for c in &keyword.as_bytes()[already_collected..] {
+    fn collect_num(&mut self, first_digit: u8) -> Result<Token, LexError> {
+        let mut num: usize = (first_digit - b'0') as usize;
+        loop {
             match self.getch() {
-                Some(cc) if cc == c => { /* continue */ },
+                Some(cc) if cc.is_ascii_digit() => {
+                    num = num * 10 + (cc - b'0') as usize;
+                    if num > 255 {
+                        return Err(LexError::SymNumberTooBig);
+                    }
+                }
                 _ => {
-                    is_keyword = false; 
                     self.ungetch();
-                    break;
-                },
+                    return Ok(Token::Sym(num as u8));
+                }
             }
         }
-        
-        if is_keyword {
-            match self.getch() {
-                Some(cc) if is_ident(cc) => {
-                    self.collect_ident();
-                    Token::Ident
-                },
+    }
+
+    fn collect_sym(&mut self) -> Result<Token, LexError> {
+        match self.getch() {
+            Some(cc) if is_sym(cc) => match self.getch() {
+                Some(b'\'') => Ok(Token::Sym(cc)),
                 _ => {
                     self.ungetch();
-                    keyword_token
+                    Err(LexError::UnclosedSym)
                 },
+            },
+            Some(other) => {
+                self.ungetch();
+                Err(LexError::InvalidSymContent(other))
+            },
+            _ => {
+                self.ungetch();
+                Err(LexError::UnclosedSym)
             }
-        } else {
-            self.collect_ident();
-            Token::Ident
         }
     }
 }
 
-#[derive(Debug)]
-pub enum LexError {
-    UnexpectedChar(u8),
-    InvalidSymContent(u8),
-    UnclosedSym,
+fn replace_keywords(tokens: &mut Vec<Token>) {
+    for tok in tokens {
+        let maybe_keyword = match tok {
+            Token::Ident(s) => match s.as_str() {
+                "let" => Some(Token::Let),
+                "accept" => Some(Token::Accept),
+                "reject" => Some(Token::Reject),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(new_tok) = maybe_keyword {
+            *tok = new_tok;
+        }
+    }
 }
 
-pub fn lex(buf: &[u8]) => Result<Vec<Token>, LexError> {
-    let lx = Lexer {
+pub fn lex(buf: &[u8]) -> Result<Vec<Token>, LexError> {
+    let mut lx = Lexer {
         buf,
         pos: 0,
+        lineno: 1,
     };
-    let tokens = Vec::new();
+    let mut tokens = Vec::new();
     
-    // TODO parse numbers; maybe we don't even need hex syms
     loop {
         lx.remove_whitespace();
-        
-        let tok = match lx.getch() {
-            Some(b'<') => Ok(Token::MoveLeft),
-            Some(b'>') => Ok(Token::MoveRight),
-            Some(b'#') => Ok(Token::MovePrint),
-            Some(b'=') => Ok(Token::Equals),
-            Some(b'[') => Ok(Token::ActionOpen),
-            Some(b']') => Ok(Token::ActionClose),
-            Some(b'@') => Ok(Token::Exec),
-            Some(b'\'') => match lx.getch() {
-                Some(cc) if is_sym(cc) => match lx.getch() {
-                    Some(b'\'') => Some(Token::Sym(cc)),
-                    _ => { self.ungetch(); Err(LexError::InvalidSym) },
-                }
-                Some(other) => { self.ungetch(); Err(LexError::InvalidSymContent()) },
-            },
-            Some(b'l') => Ok(self.collect_keyword_or_ident(1, "let", Token::Let)),
-            Some(b'a') => Ok(self.collect_keyword_or_ident(1, "accept", Token::Accept)),
-            Some(cc) if is_ident_start(cc) => Ok(self.collect_ident(1)),
-            Some(other) => Err(LexError::UnexpectedChar(other)),
+        let c = match lx.getch() {
+            Some(cc) => cc,
+            None => break,
+        };
+
+        let tok = match c {
+            b'<' => Ok(Token::MoveLeft),
+            b'>' => Ok(Token::MoveRight),
+            b'#' => Ok(Token::Print),
+            b'=' => Ok(Token::Equals),
+            b'[' => Ok(Token::ActionOpen),
+            b']' => Ok(Token::ActionClose),
+            b'(' => Ok(Token::ParensOpen),
+            b')' => Ok(Token::ParensClose),
+            b'{' => Ok(Token::BracesOpen),
+            b'}' => Ok(Token::BracesClose),
+            b'|' => Ok(Token::Bar),
+            b'@' => Ok(Token::Exec),
+            b'\'' => lx.collect_sym(),
+            cc if cc.is_ascii_digit() => lx.collect_num(cc),
+            cc if is_ident_start(cc) => Ok(lx.collect_ident()),
+            other => Err(LexError::UnexpectedChar(other)),
         }?;
         tokens.push(tok);
     }
     
-    tokens
+    replace_keywords(&mut tokens);
+    Ok(tokens)
 }
